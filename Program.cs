@@ -19,25 +19,33 @@ namespace BusinessLics_console
   {
     static void Main(string[] args)
     {
-      string connStr = ConfigurationManager.ConnectionStrings["IMSReader"].ConnectionString;
-      
 
       /*
-        * First create a dictionary using business license number as keys and List<BusLicense> as values.  Use the city of LR REST service to build this.
-        * Then loop through the dictionary.  For each business license object, query the main table (LR_BusinessLicenses) to get rec(s) with that license number.
-        * For each business object:
-        *   Check if there is a matching license number in the main table (use SQL query and put result into record set - could be >1).
-        *     If there is not, then use the object to add a rec to the main table and to the changes table (as ADD).
-        *     If there is, check each rec in main table and test if all fields match.
-        *       If there is an all field match, continue
-        *       If there is not an all field match, then
-        *         If there is only one object in dictionary and only one rec in main table then UPDATE main table rec and add to changes table (as UPDATE).
-        *         If are more than one object or rec, don't know which rec to update so add new rec to main table and add to changes table (as ADD). 
-        * Create record set of whole main table (LR_BusinessLicenses).
-        *   Loop through each rec in record set
-        *     See if there is a key in the dictionary with the license number in the record set.
-        *       If there is no key, the license number must have been dropped.  Delete this record from main db table and add to changes tbl as DELETE.
+          First create a dictionary using business license number as keys and List<BusLicense> as values.  Use the city of LR REST service to build this.
+          For each business object key in the dictionary:
+	          query records for that license number in main table (this I call a rec set or "recs")
+              If there is one business obj and <2 recs for that license number 
+                Check if there are any recs for that busness license number, 
+                  if not add to main tbl and changes tbl as ADD
+                  if there is one, check if the records all match
+                    If not, update rec in main table and add to 2 recs to changes table as UPDATE's
+              If there are >=2 business objs OR >=2 recs 
+                Loop through each business object(s) and each rec for given license number and compare every field. 
+                  If match is found for given business object, then skip
+                  If no match is found for given business object, add that business object to main table and to changes table (as ADD).
+
+            Loop through each rec in record set - this part is to determine the recs to delete. 
+              See if there is a key in the dictionary with the license number in the record set.
+                If there is no key, the license number must have been dropped.  Delete this record from main db table and add to changes tbl as DELETE.
+                If there is a key, loop through the business object(s) in list and compare all fields.
+                  If there is no match, delete this record from main db table and add to changes tbl as DELETE.
+                
+          The Program2 Main method is for creating a new LR_BusinessLicenses table.  This should only be done once except for during testing phase.
+          To toggle between the programs, go to Properties --> Application tab --> startup object
         */
+
+
+      string connStr = ConfigurationManager.ConnectionStrings["IMSReader"].ConnectionString;
 
 
       // Get the current business license data from the LR city website as list of business license objects. 
@@ -56,6 +64,9 @@ namespace BusinessLics_console
       string jsonString;
       using (Stream stream = WebResp.GetResponseStream())
       {
+
+        // Create a list of business objects from the LR city REST service. 
+
         StreamReader reader = new StreamReader(stream, System.Text.Encoding.UTF8);
         jsonString = reader.ReadToEnd();
 
@@ -76,25 +87,13 @@ namespace BusinessLics_console
         Dictionary<string, List<BusLicense>> busLicenseDict = new Dictionary<string, List<BusLicense>>();
         foreach (var itm in busLicenses)
         {
-
-          //if (itm.license_type.ToString() == "PEDDLERS")
-          //{
-          //  Debug.WriteLine("do not add to diectionary: " + itm.license_number.ToString());
-          //  continue;
-          //}
-
           busLicCount = busLicCount + 1;
           if (itm.license_number.ToString().Substring(0, 2) == "BL")
           {
             if (busLicenseDict.ContainsKey(itm.license_number))
             {
               busLicDupCount = busLicDupCount + 1;
-              if (itm.license_number == "BL133119")
-              {
-                itm.license_type = "DREW";
-              }
-              busLicenseDict[itm.license_number].Add(itm);
-              Debug.WriteLine("This is a duplicate: " + itm.license_number);
+              busLicenseDict[itm.license_number].Add(itm);       
             }
             else
             {
@@ -105,10 +104,9 @@ namespace BusinessLics_console
         }
         Debug.WriteLine("busLicenseDict.Count = " + busLicenseDict.Count().ToString());
 
-        // Loop through the business license object in the dictionary and use the license number to query the db table. 
-        // first check if there is an entry for this license number in the main db table, if not use info in object to add a rec to main and changes table.
-        // If there is an entry (or entries) for this license number in the main db table, see if all fields match.  If so, skip.  If not, add rec to main 
-        // and changes tbls.
+
+        // Loop through the business license objects in the dictionary and use the license number to query the db table. 
+        // If there is only one business object in the list and one or less recs, deal with these first. 
 
         foreach (var dictEntry in busLicenseDict)
         {
@@ -120,59 +118,108 @@ namespace BusinessLics_console
           BusinessLics_console.DataAccess da1 = new BusinessLics_console.DataAccess();
           DataSet ds2 = da1.GetData(mainTblQry);
 
-          if (ds2.Tables[0].Rows.Count < 1)
+          List<BusLicense> busLicenseList = busLicenseDict[dictEntry.Key];
+
+          if (busLicenseList.Count == 1 && ds2.Tables[0].Rows.Count < 2)
           {
-            // Add business license objects to records in main and changes tables.  Have to use foreach loop in case there are more than one. 
-            addCount = addCount + 1;
-            Debug.WriteLine("This bus lic does not exist in db: " + dictEntry.Key);
-            foreach (var listEntry in dictEntry.Value)
+
+            if (ds2.Tables[0].Rows.Count < 1)
             {
-              InsertMainTbl(listEntry);
-              InsertChangesTbl(listEntry, "ADD");
+              // There is no rec in main table, so add business license object to records in main and changes tables.  
+
+              addCount = addCount + 1;
+              InsertMainTbl(busLicenseList[0]);
+              InsertChangesTbl(busLicenseList[0], "ADD");
+
+            }
+            else
+            {
+              DataRow dr = ds2.Tables[0].Rows[0];
+
+              if (busLicenseList[0].license_type == (string)dr["license_type"]
+                  && busLicenseList[0].license_classification == (string)dr["license_classification"]
+                  && busLicenseList[0].license_category == (string)dr["license_category"]
+                  && busLicenseList[0].business_name == (string)dr["business_name"]
+                  && busLicenseList[0].contact_name == (string)dr["contact_name"]
+                  && busLicenseList[0].account_start_date == (DateTime)dr["account_start_date"]
+                  && busLicenseList[0].street_address == (string)dr["street_address"]
+                  && busLicenseList[0].city == (string)dr["city"]
+                  && busLicenseList[0].state == (string)dr["state"]
+                  && busLicenseList[0].zip_code == (string)dr["zip_code"])
+              {
+                // Do nothing because there is a match.
+              }
+              else
+              {
+                // One or more field do not match, and there is only one business object and only one rec so must be an update.
+                deleteMainTbl(dictEntry.Key);
+                InsertMainTbl(busLicenseList[0]);
+                InsertChangesTbl(busLicenseList[0], "UPDATENEW");
+
+                BusLicense blTemp = new BusLicense();
+                blTemp.license_number = (string)dr["license_number"];
+                blTemp.license_type = (string)dr["license_type"];
+                blTemp.license_classification = (string)dr["license_classification"];
+                blTemp.license_category = (string)dr["license_category"];
+                blTemp.business_name = (string)dr["business_name"];
+                blTemp.contact_name = (string)dr["contact_name"];
+                blTemp.account_start_date = (DateTime)dr["account_start_date"];
+                blTemp.street_address = (string)dr["street_address"];
+                blTemp.city = (string)dr["city"];
+                blTemp.state = (string)dr["state"];
+                blTemp.zip_code = (string)dr["zip_code"];
+                InsertChangesTbl(blTemp, "UPDATEOLD");
+                blTemp = null;
+              }
             }
           }
-
-          else
+          else  // There is either >1 business objects or >1 recs in main table. 
           {
-            // for each license object in the list (usually only one), check to see if there is rec in db table with matching fields. 
+
             foreach (var listEntry in dictEntry.Value)
             {
+
+              BusLicense bl = new BusLicense();
               matchFound = false;
               foreach (DataRow dr in ds2.Tables[0].Rows)
               {
-                if ((string)dr["license_type"] == listEntry.license_type
-                && (string)dr["license_classification"] == listEntry.license_classification
-                && (string)dr["license_category"] == listEntry.license_category
-                && (string)dr["business_name"] == listEntry.business_name
-                //&& (DateTime)ds2.Tables[0].Rows[0]["account_start_date"] == itm.account_start_date
-                && (string)dr["contact_name"] == listEntry.contact_name
-                && (string)dr["street_address"] == listEntry.street_address
-                && (string)dr["city"] == listEntry.city
-                && (string)dr["state"] == listEntry.state
-                && (string)dr["zip_code"] == listEntry.zip_code)
+                bl.license_number = (string)dr["license_number"];
+                bl.license_type = (string)dr["license_type"];
+                bl.license_classification = (string)dr["license_classification"];
+                bl.license_category = (string)dr["license_category"];
+                bl.business_name = (string)dr["business_name"];
+                bl.contact_name = (string)dr["contact_name"];
+                bl.account_start_date = (DateTime)dr["account_start_date"];
+                bl.street_address = (string)dr["street_address"];
+                bl.city = (string)dr["city"];
+                bl.state = (string)dr["state"];
+                bl.zip_code = (string)dr["zip_code"];
+
+                if (bl.license_type == listEntry.license_type
+                && bl.license_classification == listEntry.license_classification
+                && bl.license_category == listEntry.license_category
+                && bl.business_name == listEntry.business_name
+                && bl.account_start_date == listEntry.account_start_date
+                && bl.contact_name == listEntry.contact_name
+                && bl.street_address == listEntry.street_address
+                && bl.city == listEntry.city
+                && bl.state == listEntry.state
+                && bl.zip_code == listEntry.zip_code)
                 {
                   // There is a match, so flip the switch
                   matchFound = true;
                 }
                 else
                 {
-                  // This was not a match so continue 
+                  // This was not a match so continue checking for matches
                 }
               }
-              if (matchFound == false)  // No matching recs found.  If there is only one obj in dictionary and one rec in db table, then this must be an update.  
+              if (matchFound == false)  // No matching recs found for this business object, so add it to main as ADD    
               {
-                if (dictEntry.Value.Count == 1 && ds2.Tables[0].Rows.Count == 1)
-                {
-                  changedRecCount = changedRecCount + 1;
-                  InsertMainTbl(listEntry);
-                  InsertChangesTbl(listEntry, "UPDATE");
-                }
-                else
-                {
-                  InsertMainTbl(listEntry);
-                  InsertChangesTbl(listEntry, "ADD");
-                }
+                InsertMainTbl(listEntry);
+                InsertChangesTbl(listEntry, "ADD");
               }
+              bl = null;
             }
           }
         }  // Ends foreach loop for business object dictionary
@@ -187,41 +234,64 @@ namespace BusinessLics_console
         BusinessLics_console.DataAccess daAllRecs = new BusinessLics_console.DataAccess();
         DataSet dsAllRecs = daAllRecs.GetData(allRecsQry);
 
-        Boolean keyExists;
+        Boolean keyExists = true;
+        Boolean matchExists = false;
+        BusLicense bl_rec = new BusLicense();
+
         foreach (DataRow dr in dsAllRecs.Tables[0].Rows)
         {
+          bl_rec.license_number = (string)dr["license_number"];
+          bl_rec.license_type = (string)dr["license_type"];
+          bl_rec.license_classification = (string)dr["license_classification"];
+          bl_rec.license_category = (string)dr["license_category"];
+          bl_rec.business_name = (string)dr["business_name"];
+          bl_rec.contact_name = (string)dr["contact_name"];
+          bl_rec.account_start_date = (DateTime)dr["account_start_date"];
+          bl_rec.street_address = (string)dr["street_address"];
+          bl_rec.city = (string)dr["city"];
+          bl_rec.state = (string)dr["state"];
+          bl_rec.zip_code = (string)dr["zip_code"];
+
           keyExists = busLicenseDict.ContainsKey((string)dr["license_number"]);
           if (keyExists == false)
           {
-            Debug.WriteLine("This license not in dictionary and will be deleted: " + (string)dr["license_number"]);
-
-            BusLicense bl = new BusLicense();
-            bl.license_number = (string)dr["license_number"];
-            bl.license_type = (string)dr["license_type"];
-            bl.license_classification = (string)dr["license_classification"];
-            bl.license_category = (string)dr["license_category"];
-            bl.business_name = (string)dr["business_name"];
-            bl.contact_name = (string)dr["contact_name"];
-            bl.account_start_date = (DateTime)dr["account_start_date"];
-            bl.street_address = (string)dr["street_address"];
-            bl.city = (string)dr["city"];
-            bl.state = (string)dr["state"];
-            bl.zip_code = (string)dr["zip_code"];
-
-            InsertChangesTbl(bl, "DELETE");
+            InsertChangesTbl(bl_rec, "DELETE");
             deleteMainTbl((string)dr["license_number"]);
-            bl = null;
+          }
+          else
+          {
+            matchExists = false;
+            foreach (BusLicense blo in busLicenseDict[(string)dr["license_number"]])  
+            {
+              if (blo.license_type == bl_rec.license_type 
+                && blo.license_classification == bl_rec.license_classification 
+                && blo.license_category == bl_rec.license_category 
+                && blo.business_name == bl_rec.business_name 
+                && blo.contact_name == bl_rec.contact_name 
+                && blo.account_start_date == bl_rec.account_start_date 
+                && blo.street_address == bl_rec.street_address 
+                && blo.city == bl_rec.city 
+                && blo.state == bl_rec.state 
+                && blo.zip_code == bl_rec.zip_code)
+              {
+                matchExists = true;
+              }
+            }
+            if (matchExists == false)
+            {
+              InsertChangesTbl(bl_rec, "DELETE");
+              deleteMainTbl2(bl_rec);
+            }
           }
         }
       }
-
       Debug.WriteLine("busLicCount = " + busLicCount.ToString());
       Debug.WriteLine("busLicDupCount = " + busLicDupCount.ToString());
       Debug.WriteLine("The AddCount is: " + addCount.ToString());
       Debug.WriteLine("changedRecCount = " + changedRecCount.ToString());
       Debug.WriteLine("program complete");
-
     }
+
 
     #region Functions
 
@@ -270,7 +340,7 @@ namespace BusinessLics_console
       using (var conn = new SqlConnection(connStr))
       {
         //  Insert into the LR_BusinessLicenses table
-        //Debug.WriteLine("Adding rec using InsertMainTable.  license_number = " + busLic.license_number);
+        
         using (SqlCommand command = new SqlCommand(insertQry, conn))
         {
           command.Parameters.AddWithValue("@license_number", (string)busLic.license_number);
@@ -314,8 +384,80 @@ namespace BusinessLics_console
         }
       }
     }
+
+    public static void deleteMainTbl2(BusLicense busLic)
+    {
+      string connStr = ConfigurationManager.ConnectionStrings["IMSReader"].ConnectionString;
+      string deleteQry = "DELETE FROM [LRW_V8].[LR_BusinessLicenses] WHERE license_number = @license_number AND license_type = @license_type AND license_classification = @license_classification " +
+                         "AND license_category = @license_category AND contact_name = @contact_name AND account_start_date = @account_start_date AND street_address = @street_address " +
+                         "AND city = @city AND state = @state AND zip_code = @zip_code";
+      using (var conn = new SqlConnection(connStr))
+      {
+        using (SqlCommand command = new SqlCommand(deleteQry, conn))
+        {
+          command.Parameters.AddWithValue("@license_number", busLic.license_number);
+          command.Parameters.AddWithValue("@license_type", busLic.license_type);
+          command.Parameters.AddWithValue("@license_classification", busLic.license_classification);
+          command.Parameters.AddWithValue("@license_category", busLic.license_category);
+          command.Parameters.AddWithValue("@contact_name", busLic.contact_name);
+          command.Parameters.AddWithValue("@account_start_date", busLic.account_start_date);
+          command.Parameters.AddWithValue("@street_address", busLic.street_address);
+          command.Parameters.AddWithValue("@city", busLic.city);
+          command.Parameters.AddWithValue("@state", busLic.state);
+          command.Parameters.AddWithValue("@zip_code", busLic.zip_code);
+
+          conn.Open();
+          int result = command.ExecuteNonQuery();
+          if (result < 1)
+            Debug.WriteLine("No data inserted");
+          conn.Close();
+        }
+      }
+    }
+
+    #endregion Functions
   }
 
 
+  class Program2
+  {
+    static void Main(string[] args)
+    {
+
+      HttpWebRequest WebReq = (HttpWebRequest)WebRequest.Create(string.Format("https://data.littlerock.gov/resource/vthq-dt7e.json?$limit=100000"));
+      WebReq.Method = "GET";
+      HttpWebResponse WebResp = (HttpWebResponse)WebReq.GetResponse();
+
+      string jsonString;
+      using (Stream stream = WebResp.GetResponseStream())
+      {
+        StreamReader reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+        jsonString = reader.ReadToEnd();
+
+        List<BusLicense> busLicenses = JsonConvert.DeserializeObject<List<BusLicense>>(jsonString);
+        System.Diagnostics.Debug.WriteLine("busLicenses.Count= " + busLicenses.Count.ToString());
+
+        if (busLicenses.Count < 1)
+        {
+          Console.WriteLine("no business license objects returned from LR REST");
+          return;
+        }
+
+        // Loop through the business license objects and add to table - add only the licenses that start with "BL"
+        int addCount = 0;
+        foreach (var itm in busLicenses)
+        {
+
+          if (itm.license_number.ToString().Substring(0, 2) == "BL")
+          {
+            addCount = addCount + 1;
+            BusinessLics_console.Program.InsertMainTbl(itm);
+          }
+        }
+        Debug.WriteLine("addCount = " + addCount.ToString());
+        Debug.WriteLine("Program complete");
+      }
+    }
+  }
 }
-#endregion Functions
+
