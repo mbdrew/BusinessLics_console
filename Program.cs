@@ -22,13 +22,13 @@ namespace BusinessLics_console
 
       /*
           First create a dictionary using business license number as keys and List<BusLicense> as values.  Use the city of LR REST service to build this.
-          For each business object key in the dictionary:
-	          query records for that license number in main table (this I call a rec set or "recs")
+          Loop thru each business object key in the dictionary:
+	          query records for that license number in main table of database (this I call a rec set or "recs")
               If there is one business obj and <2 recs for that license number 
                 Check if there are any recs for that busness license number, 
                   if not add to main tbl and changes tbl as ADD
                   if there is one, check if the records all match
-                    If not, update rec in main table and add to 2 recs to changes table as UPDATE's
+                    If not, update rec in main table and add 2 recs to changes table as UPDATEOLD and UPDATENEW
               If there are >=2 business objs OR >=2 recs 
                 Loop through each business object(s) and each rec for given license number and compare every field. 
                   If match is found for given business object, then skip
