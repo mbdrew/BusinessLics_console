@@ -12,11 +12,15 @@ using System.IO;
 using System.Diagnostics;
 using System.Data.SqlClient;
 using System.Configuration;
+using System.Net.Http;
+
+[assembly: log4net.Config.XmlConfigurator(Watch =true)]
 
 namespace BusinessLics_console
 {
   class Program
   {
+    private static readonly log4net.ILog log = log4net.LogManager.GetLogger("Program.cs");
     static void Main(string[] args)
     {
 
@@ -44,21 +48,26 @@ namespace BusinessLics_console
           To toggle between the programs, go to Properties --> Application tab --> startup object
         */
 
-
       string connStr = ConfigurationManager.ConnectionStrings["IMSReader"].ConnectionString;
-
 
       // Get the current business license data from the LR city website as list of business license objects. 
 
+      // Had to add this because it was not working on the server. 
+      System.Net.ServicePointManager.Expect100Continue = false;
+      System.Net.ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
+
       //HttpWebRequest WebReq = (HttpWebRequest)WebRequest.Create(string.Format("https://data.littlerock.gov/resource/vthq-dt7e.json?license_type=RESTAURANT"));
-      HttpWebRequest WebReq = (HttpWebRequest)WebRequest.Create(string.Format("https://data.littlerock.gov/resource/vthq-dt7e.json?$limit=100000"));
+      HttpWebRequest WebReq = (HttpWebRequest)WebRequest.Create(string.Format("https://data.littlerock.gov/resource/vthq-dt7e.json?$limit=50000"));
+
       WebReq.Method = "GET";
-      HttpWebResponse WebResp = (HttpWebResponse)WebReq.GetResponse();
+
+      HttpWebResponse WebResp = (HttpWebResponse)WebReq.GetResponse(); 
 
       int busLicCount = 0;
       int busLicDupCount = 0;
       int changedRecCount = 0;
       int addCount = 0;
+      int deletedRecs = 0;
       Boolean matchFound = false;
 
       string jsonString;
@@ -75,9 +84,10 @@ namespace BusinessLics_console
 
         if (busLicenses.Count < 1)
         {
-          Console.WriteLine("no business license objects returned from LR REST");
+          log.Debug("no business license objects returned from LR REST");
           return;
         }
+        log.Debug("Total number of business licenses on LR site = " + busLicenses.Count);
 
 
         // Create a dictionary from list of BusLicense objects:  license number --> list of busLicense objects
@@ -102,7 +112,7 @@ namespace BusinessLics_console
             }
           }
         }
-        Debug.WriteLine("busLicenseDict.Count = " + busLicenseDict.Count().ToString());
+        log.Debug("Total business licenses with BL prefix = " + busLicenseDict.Count().ToString());
 
 
         // Loop through the business license objects in the dictionary and use the license number to query the db table. 
@@ -152,6 +162,8 @@ namespace BusinessLics_console
               else
               {
                 // One or more field do not match, and there is only one business object and only one rec so must be an update.
+                changedRecCount = changedRecCount + 1;
+
                 deleteMainTbl(dictEntry.Key);
                 InsertMainTbl(busLicenseList[0]);
                 InsertChangesTbl(busLicenseList[0], "UPDATENEW");
@@ -279,17 +291,19 @@ namespace BusinessLics_console
             }
             if (matchExists == false)
             {
+              deletedRecs = deletedRecs + 1;
               InsertChangesTbl(bl_rec, "DELETE");
               deleteMainTbl2(bl_rec);
             }
           }
         }
       }
-      Debug.WriteLine("busLicCount = " + busLicCount.ToString());
-      Debug.WriteLine("busLicDupCount = " + busLicDupCount.ToString());
-      Debug.WriteLine("The AddCount is: " + addCount.ToString());
-      Debug.WriteLine("changedRecCount = " + changedRecCount.ToString());
-      Debug.WriteLine("program complete");
+
+      log.Debug("Number of business licenses with duplicate entries = " + busLicDupCount.ToString());
+      log.Debug("Number of records added = " + addCount.ToString());
+      log.Debug("Number of updated records = " + changedRecCount.ToString());
+      log.Debug("Number of deleted records = " + deletedRecs.ToString());
+      log.Debug("program complete");
     }
 
 
@@ -459,5 +473,7 @@ namespace BusinessLics_console
       }
     }
   }
+
+
 }
 
